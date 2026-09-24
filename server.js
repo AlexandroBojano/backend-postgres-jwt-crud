@@ -1,3 +1,4 @@
+
 import express from "express"
 import pool from "./db.js"
 import cors from "cors"
@@ -5,25 +6,18 @@ import dotenv from "dotenv"
 import bcrypt from "bcrypt"
 import jwt from "jsonwebtoken"
 
-
 dotenv.config()
 
 const app = express()
-
-
-
 const port = process.env.PORT || 3000
 
 app.use(express.json())
 app.use(cors())
 
-
 const authMiddleware = (req, res, next) => {
-
     const authHeader = req.headers.authorization
 
-    if(!authHeader) {
-
+    if (!authHeader) {
         return res.status(401).json({
             error: "TOKEN REQUIRED"
         })
@@ -32,186 +26,132 @@ const authMiddleware = (req, res, next) => {
     const token = authHeader.split(" ")[1]
 
     try {
-
-        const decoded = jwt.verify(token,process.env.JWT_SECRET)
-
-        req.user =  decoded
-
+        const decoded = jwt.verify(token, process.env.JWT_SECRET)
+        req.user = decoded
         next()
     } catch (err) {
-        return  res.status(401).json({
+        return res.status(401).json({
             error: "INVALID TOKEN"
         })
     }
-
-
-
-
-
 }
 
-
-app.get("/",  authMiddleware, (req, res) => {
+app.get("/", authMiddleware, (req, res) => {
     res.send("MOTHERFUCK")
 })
 
-
-app.get("/users",  authMiddleware, async (req, res) => {
-
-    let conn
-
+app.get("/users", authMiddleware, async (req, res) => {
     try {
-
-        conn = await pool.getConnection()
-    
-         const rows = await conn.query("SELECT * FROM users")
-
-         res.json(rows)
-
-
-
+        const result = await pool.query("SELECT * FROM users")
+        res.json(result.rows)
     } catch (err) {
-
         console.error(err)
-
-        res.status(500).json( { error: "ERROR for found users"})
-    } finally {
-
-        if (conn) conn.release()
-    }
-
-    
-})
-
-
-app.get("/users/:id",  authMiddleware, async (req, res) => {
-
-    let conn 
-
-    try {
-        conn = await pool.getConnection()
-
-        const rows = await conn.query("SELECT * FROM users WHERE id = ?",[req.params.id])
-
-
-        if(rows.length === 0){
-
-            return res.status(404).json({ error: 'USER NOT FOUND '})
-        }
-
-        res.json(rows[0])
-    } catch (err) {
-
-        console.error(err)
-
-        res.status(500).json({ error: "SERVER ERROR" })
-    } finally {
-
-        if (conn) conn.release()
+        res.status(500).json({
+            error: "ERROR FOR FOUND USERS"
+        })
     }
 })
 
-app.post("/users", async (req, res) => {
-
-    let conn
-
-
+app.get("/users/:id", authMiddleware, async (req, res) => {
     try {
-
-        conn = await pool.getConnection()
-
-        const { name, email, password } = req.body
-
-        const hashedPassword = await bcrypt.hash(password, 10)
-
-        const result = await conn.query(
-            "INSERT INTO users (name, email, password) VALUES (?, ?, ?)", [name, email, hashedPassword]
-        )
-        
-          
-
-        res.status(201).json(
-            {
-                id: result.insertId,
-                name,
-                email
-            }
-        )
-    } catch (err) {
-        console.error(err)
-
-        if(err.code === "ER_DUP_ENTRY") {
-
-            return res.status(409).json({ error: "Email was registried"})
-        }
-
-        res.status(500).json( { error: "SERVER ERROR"})
-    } finally {
-        if (conn) conn.release()
-    }
-})
-
-
-app.put("/users/:id",  authMiddleware, async (req, res) => {
-
-    let conn
-
-    try {
-
-        conn = await pool.getConnection()
-
-        const { name, email } = req.body
-
-        const result = await conn.query(
-            "UPDATE users SET name = ?, email = ? WHERE id = ?",[name, email, req.params.id]
+        const result = await pool.query(
+            "SELECT * FROM users WHERE id = $1",
+            [req.params.id]
         )
 
-        if(result.affectedRows === 0) {
-
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 error: "USER NOT FOUND"
             })
         }
 
-        res.json(
-            {
-                id: req.params.id,
-                name,
-                email
-            }
-        )
+        res.json(result.rows[0])
     } catch (err) {
-
         console.error(err)
-
-        if (err.code === "ER_DUP_ENTRY"){
-
-            return res.status(409).json(
-                {
-                    error: "data already exists"
-                }
-            )
-        }
-    } finally {
-        if (conn) conn.release()
+        res.status(500).json({
+            error: "SERVER ERROR"
+        })
     }
 })
 
-
-app.delete("/users/:id",  authMiddleware, async (req, res) => {
-
-    let conn
-
+app.post("/users", async (req, res) => {
     try {
+        const { name, email, password } = req.body
 
-        conn = await pool.getConnection()
+        const hashedPassword = await bcrypt.hash(password, 10)
 
-        const result = await conn.query(
-            "DELETE FROM users WHERE id = ?",[req.params.id]
+        const result = await pool.query(
+            `INSERT INTO users (name, email, password)
+             VALUES ($1, $2, $3)
+             RETURNING id`,
+            [name, email, hashedPassword]
         )
 
-        if(result.affectedRows === 0){
+        res.status(201).json({
+            id: result.rows[0].id,
+            name,
+            email
+        })
+    } catch (err) {
+        console.error(err)
 
+        if (err.code === "23505") {
+            return res.status(409).json({
+                error: "EMAIL ALREADY REGISTERED"
+            })
+        }
+
+        res.status(500).json({
+            error: "SERVER ERROR"
+        })
+    }
+})
+
+app.put("/users/:id", authMiddleware, async (req, res) => {
+    try {
+        const { name, email } = req.body
+
+        const result = await pool.query(
+            `UPDATE users
+             SET name = $1, email = $2
+             WHERE id = $3`,
+            [name, email, req.params.id]
+        )
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({
+                error: "USER NOT FOUND"
+            })
+        }
+
+        res.json({
+            id: req.params.id,
+            name,
+            email
+        })
+    } catch (err) {
+        console.error(err)
+
+        if (err.code === "23505") {
+            return res.status(409).json({
+                error: "DATA ALREADY EXISTS"
+            })
+        }
+
+        res.status(500).json({
+            error: "SERVER ERROR"
+        })
+    }
+})
+
+app.delete("/users/:id", authMiddleware, async (req, res) => {
+    try {
+        const result = await pool.query(
+            "DELETE FROM users WHERE id = $1",
+            [req.params.id]
+        )
+
+        if (result.rowCount === 0) {
             return res.status(404).json({
                 error: "USER NOT FOUND"
             })
@@ -221,45 +161,37 @@ app.delete("/users/:id",  authMiddleware, async (req, res) => {
             message: "USER DELETED"
         })
     } catch (err) {
-
         console.error(err)
 
         res.status(500).json({
             error: "SERVER ERROR"
         })
-    } finally {
-
-        if (conn) conn.release()
     }
 })
 
 app.post("/auth/login", async (req, res) => {
-
-    let conn
-
     try {
-
-        conn =  await pool.getConnection()
-
         const { email, password } = req.body
 
-        const rows = await conn.query(
-            "SELECT * FROM users WHERE email = ?", [email]
+        const result = await pool.query(
+            "SELECT * FROM users WHERE email = $1",
+            [email]
         )
 
-        if(rows.length === 0){
-
+        if (result.rows.length === 0) {
             return res.status(401).json({
                 error: "INVALID EMAIL OR PASSWORD"
             })
         }
 
-        const user = rows[0]
+        const user = result.rows[0]
 
-        const passwordCorrect = await bcrypt.compare(password, user.password)
+        const passwordCorrect = await bcrypt.compare(
+            password,
+            user.password
+        )
 
-        if(!passwordCorrect){
-
+        if (!passwordCorrect) {
             return res.status(401).json({
                 error: "INVALID EMAIL OR PASSWORD"
             })
@@ -278,25 +210,18 @@ app.post("/auth/login", async (req, res) => {
         )
 
         res.json({
-             message: "LOGIN SUCESS", token
-    })
-
-
-    } catch  (err) {
-
+            message: "LOGIN SUCCESS",
+            token
+        })
+    } catch (err) {
         console.error(err)
 
         res.status(500).json({
             error: "SERVER ERROR"
         })
-
-    } finally {
-        if (conn) conn.release()
     }
 })
 
 app.listen(port, () => {
-
     console.log(`Server running on http://localhost:${port}`)
-    //console.log(process.env.DB_USER)
 })
